@@ -80,6 +80,29 @@ Find your ADB serial number:
 
 ## Install the indicator
 
+### Configuration
+
+The indicator reads `~/.config/ardtemp/ardtemp.conf` at startup. Copy the example and edit as needed:
+
+```bash
+mkdir -p ~/.config/ardtemp
+cp conf/ardtemp.conf.example ~/.config/ardtemp/ardtemp.conf
+```
+
+Key settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `board` | `uno-q` | `board_id` from ardconfig — used to auto-detect the serial port |
+| `ardconfig_path` | _(empty)_ | Path to your [ardconfig](https://github.com/kwehden/ardconfig) installation. When set, the indicator runs `ardconfig-detect --json` on every reconnect to find the board's current `/dev/ttyACM*` port automatically. Leave empty to use the `device` fallback instead. |
+| `device` | `/dev/ttyACM0` | Fallback serial device if auto-detection is disabled or finds nothing |
+| `baud` | `9600` | Must match `Serial.begin()` in the sketch |
+| `spike_threshold_c` | `5.0` | °C swing within `spike_window_s` to trigger the alert |
+| `spike_window_s` | `120` | Look-back window for spike detection, in seconds |
+| `reconnect_delay` | `5` | Seconds between reconnect attempts after a disconnect |
+
+All settings are optional — the indicator runs with defaults if no config file exists.
+
 ### Run manually
 
 ```bash

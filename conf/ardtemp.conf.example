@@ -1,0 +1,24 @@
+[ardtemp]
+# Board profile ID from ardconfig — used to auto-detect the serial device.
+# Run ardconfig-detect --json to see available board_id values.
+board = uno-q
+
+# Path to your ardconfig installation.
+# ardtemp will call ardconfig-detect --json to find the board's serial port.
+# Leave empty to skip auto-detection and use the device setting below.
+ardconfig_path = ~/projects/ardconfig
+
+# Fallback serial device if auto-detection fails or ardconfig_path is empty.
+device = /dev/ttyACM0
+
+# Serial baud rate — must match the sketch.
+baud = 9600
+
+# Alert trigger: temperature swing (°C) within spike_window_s to fire the alert.
+spike_threshold_c = 5.0
+
+# Alert trigger: look-back window in seconds.
+spike_window_s = 120
+
+# Seconds to wait before attempting serial reconnect after a disconnect.
+reconnect_delay = 5

@@ -4,18 +4,25 @@ gi.require_version('AyatanaAppIndicator3', '0.1')
 gi.require_version('Gtk', '3.0')
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3, Gtk, GLib
 
+import configparser
 import json
+import os
+import subprocess
 import threading
 import time
 import serial
 from collections import deque
 
-DEVICE            = '/dev/ttyACM0'
+CONFIG_PATH = os.path.expanduser('~/.config/ardtemp/ardtemp.conf')
+GUIDE       = "-88.8°F  100%"
+
+# Overridden from config at startup via load_config()
 BAUD              = 9600
 RECONNECT_DELAY   = 5
-GUIDE             = "-88.8°F  100%"
-SPIKE_THRESHOLD_C = 5.0   # °C change to trigger alert
-SPIKE_WINDOW_S    = 120   # look-back window in seconds
+SPIKE_THRESHOLD_C = 5.0
+SPIKE_WINDOW_S    = 120
+
+_cfg = None
 
 indicator    = None
 toggle_item  = None
@@ -31,6 +38,48 @@ temp_history  = deque()
 
 _serial_port = None
 _serial_lock = threading.Lock()
+
+
+# --- config -----------------------------------------------------------------
+
+def load_config():
+    global _cfg, BAUD, SPIKE_THRESHOLD_C, SPIKE_WINDOW_S, RECONNECT_DELAY
+    cp = configparser.ConfigParser()
+    cp.read_dict({'ardtemp': {
+        'board':             'uno-q',
+        'ardconfig_path':    '',
+        'device':            '/dev/ttyACM0',
+        'baud':              '9600',
+        'spike_threshold_c': '5.0',
+        'spike_window_s':    '120',
+        'reconnect_delay':   '5',
+    }})
+    cp.read(CONFIG_PATH)
+    _cfg              = cp['ardtemp']
+    BAUD              = int(_cfg['baud'])
+    SPIKE_THRESHOLD_C = float(_cfg['spike_threshold_c'])
+    SPIKE_WINDOW_S    = int(_cfg['spike_window_s'])
+    RECONNECT_DELAY   = int(_cfg['reconnect_delay'])
+
+
+def detect_device():
+    ardconfig = _cfg.get('ardconfig_path', '').strip()
+    if not ardconfig:
+        return _cfg['device']
+    detect_bin = os.path.expanduser(os.path.join(ardconfig, 'bin', 'ardconfig-detect'))
+    try:
+        result = subprocess.run(
+            [detect_bin, '--json'],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(result.stdout)
+        target = _cfg.get('board', '').strip()
+        for board in data.get('boards', []):
+            if board.get('board_id') == target:
+                return board['device']
+    except Exception:
+        pass
+    return _cfg['device']
 
 
 # --- unit helpers -----------------------------------------------------------
@@ -123,7 +172,7 @@ def process_reading(t_c, h):
 
 def set_no_sensor():
     global temp_history
-    temp_history.clear()   # stale history would trigger spurious alerts on reconnect
+    temp_history.clear()
     if alert_active:
         dismiss_alert()
     indicator.set_label("no sensor", GUIDE)
@@ -135,8 +184,9 @@ def set_no_sensor():
 def read_serial():
     global _serial_port
     while True:
+        device = detect_device()
         try:
-            with serial.Serial(DEVICE, BAUD, timeout=3) as ser:
+            with serial.Serial(device, BAUD, timeout=3) as ser:
                 with _serial_lock:
                     _serial_port = ser
                 time.sleep(2)
@@ -199,6 +249,7 @@ def build_menu():
 
 def main():
     global indicator
+    load_config()
     indicator = AppIndicator3.Indicator.new(
         "ardtemp",
         "weather-clear-symbolic",
