@@ -6,6 +6,11 @@
       "status": "ok",
       "name": "board_ttyACM0",
       "message": "Arduino Uno Q on /dev/ttyACM0 [arduino:zephyr:unoq] — accessible"
+    },
+    {
+      "status": "ok",
+      "name": "board_ttyACM1",
+      "message": "Arduino Uno R4 WiFi on /dev/ttyACM1 [arduino:renesas_uno:unor4wifi] — accessible"
     }
   ],
   "boards": [
@@ -19,6 +24,17 @@
       "serial": "657474962",
       "accessible": true,
       "notes": "Zephyr core is BETA. Requires bootloader burn on first use (double-click RESET)."
+    },
+    {
+      "device": "/dev/ttyACM1",
+      "vendor_id": "2341",
+      "product_id": "1002",
+      "name": "Arduino Uno R4 WiFi",
+      "fqbn": "arduino:renesas_uno:unor4wifi",
+      "board_id": "r4wifi",
+      "serial": "9070692BE124",
+      "accessible": true,
+      "notes": "Mature board with well-established library ecosystem."
     }
   ],
   "unknown_boards": []

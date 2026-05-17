@@ -175,10 +175,12 @@ class TestArdconfigContract:
             assert 'board_id' in board, f"missing board_id: {board}"
             assert 'device'   in board, f"missing device: {board}"
 
-    def test_uno_q_profile_present(self):
+    def test_supported_board_profiles_present(self):
         ids = {b['board_id'] for b in self.data['boards']}
-        assert 'uno-q' in ids
+        assert 'uno-q'   in ids
+        assert 'r4wifi'  in ids
 
-    def test_uno_q_device_is_serial_port(self):
-        uno_q = next(b for b in self.data['boards'] if b['board_id'] == 'uno-q')
-        assert uno_q['device'].startswith('/dev/tty')
+    def test_each_board_device_is_serial_port(self):
+        for board in self.data['boards']:
+            assert board['device'].startswith('/dev/tty'), \
+                f"{board['board_id']} device is not a serial port: {board['device']}"
