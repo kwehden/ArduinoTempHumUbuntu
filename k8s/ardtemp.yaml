@@ -1,0 +1,76 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ardtemp
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ardtemp-data
+  namespace: ardtemp
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ardtemp-service
+  namespace: ardtemp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ardtemp-service
+  template:
+    metadata:
+      labels:
+        app: ardtemp-service
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: polecat
+      containers:
+        - name: ardtemp-service
+          image: laminarflow:30500/ardtemp/service:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DB_PATH
+              value: /data/ardtemp.db
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ardtemp-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ardtemp-service
+  namespace: ardtemp
+spec:
+  type: NodePort
+  selector:
+    app: ardtemp-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30700

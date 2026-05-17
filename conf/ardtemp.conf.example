@@ -1,18 +1,11 @@
 [ardtemp]
-# Board profile ID from ardconfig — used to auto-detect the serial device.
+# Board profile ID from ardconfig — used to identify the board.
 # Run ardconfig-detect --json to see available board_id values.
-board = uno-q
+board = r4wifi
 
-# Path to your ardconfig installation.
-# ardtemp will call ardconfig-detect --json to find the board's serial port.
-# Leave empty to skip auto-detection and use the device setting below.
-ardconfig_path = ~/projects/ardconfig
-
-# Fallback serial device if auto-detection fails or ardconfig_path is empty.
-device = /dev/ttyACM0
-
-# Serial baud rate — must match the sketch.
-baud = 9600
+# URL of the ardtemp-service (K8s NodePort).
+# The indicator polls this for live readings; the board posts readings here.
+service_url = http://laminarflow:30700
 
 # Alert trigger: temperature swing (°C) within spike_window_s to fire the alert.
 spike_threshold_c = 5.0

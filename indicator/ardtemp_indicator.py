@@ -7,20 +7,22 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator3, Gtk, GLib
 import configparser
 import json
 import os
-import subprocess
 import threading
 import time
-import serial
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import deque
 
 CONFIG_PATH = os.path.expanduser('~/.config/ardtemp/ardtemp.conf')
 GUIDE       = "-88.8°F  100%"
 
 # Overridden from config at startup via load_config()
-BAUD              = 9600
+BAUD              = 9600      # kept for reference; unused in HTTP mode
 RECONNECT_DELAY   = 5
 SPIKE_THRESHOLD_C = 5.0
 SPIKE_WINDOW_S    = 120
+STALE_THRESHOLD_S = 10        # readings older than this are treated as no-sensor
 
 _cfg = None
 
@@ -36,9 +38,6 @@ current_t_c   = None
 current_h     = None
 temp_history  = deque()
 
-_serial_port = None
-_serial_lock = threading.Lock()
-
 
 # --- config -----------------------------------------------------------------
 
@@ -46,9 +45,8 @@ def load_config():
     global _cfg, BAUD, SPIKE_THRESHOLD_C, SPIKE_WINDOW_S, RECONNECT_DELAY
     cp = configparser.ConfigParser()
     cp.read_dict({'ardtemp': {
-        'board':             'uno-q',
-        'ardconfig_path':    '',
-        'device':            '/dev/ttyACM0',
+        'board':             'r4wifi',
+        'service_url':       'http://laminarflow:30700',
         'baud':              '9600',
         'spike_threshold_c': '5.0',
         'spike_window_s':    '120',
@@ -62,24 +60,30 @@ def load_config():
     RECONNECT_DELAY   = int(_cfg['reconnect_delay'])
 
 
-def detect_device():
-    ardconfig = _cfg.get('ardconfig_path', '').strip()
-    if not ardconfig:
-        return _cfg['device']
-    detect_bin = os.path.expanduser(os.path.join(ardconfig, 'bin', 'ardconfig-detect'))
-    try:
-        result = subprocess.run(
-            [detect_bin, '--json'],
-            capture_output=True, text=True, timeout=10
-        )
-        data = json.loads(result.stdout)
-        target = _cfg.get('board', '').strip()
-        for board in data.get('boards', []):
-            if board.get('board_id') == target:
-                return board['device']
-    except Exception:
-        pass
-    return _cfg['device']
+def _service_url():
+    return _cfg.get('service_url', 'http://laminarflow:30700').rstrip('/')
+
+def _board_id():
+    return _cfg.get('board', 'r4wifi')
+
+
+# --- HTTP helpers -----------------------------------------------------------
+
+def _http_get(path, params=None):
+    url = _service_url() + path
+    if params:
+        url += '?' + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.loads(r.read())
+
+def _http_post(path, data):
+    body = json.dumps(data).encode()
+    req  = urllib.request.Request(
+        _service_url() + path, data=body,
+        headers={'Content-Type': 'application/json'}
+    )
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
 
 
 # --- unit helpers -----------------------------------------------------------
@@ -93,15 +97,13 @@ def format_reading(t_c, h):
     return f"{t_c:.1f}°C  {h:.0f}%"
 
 
-# --- serial write -----------------------------------------------------------
+# --- command dispatch -------------------------------------------------------
 
-def send_serial_cmd(cmd: bytes):
-    with _serial_lock:
-        if _serial_port and _serial_port.is_open:
-            try:
-                _serial_port.write(cmd)
-            except Exception:
-                pass
+def send_cmd(cmd: str):
+    threading.Thread(
+        target=lambda: _http_post('/command', {'board_id': _board_id(), 'cmd': cmd}),
+        daemon=True
+    ).start()
 
 
 # --- alert ------------------------------------------------------------------
@@ -128,7 +130,7 @@ def start_alert():
     dismiss_item.set_sensitive(True)
     indicator.set_status(AppIndicator3.IndicatorStatus.ATTENTION)
     flash_timer = GLib.timeout_add(500, flash_tick)
-    send_serial_cmd(b'F')
+    send_cmd('F')
 
 def dismiss_alert():
     global alert_active, flash_timer, flash_state
@@ -141,7 +143,7 @@ def dismiss_alert():
     indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
     if current_t_c is not None:
         indicator.set_label(format_reading(current_t_c, current_h), GUIDE)
-    send_serial_cmd(b'D')
+    send_cmd('D')
 
 
 # --- spike detection --------------------------------------------------------
@@ -179,34 +181,21 @@ def set_no_sensor():
     return False
 
 
-# --- serial -----------------------------------------------------------------
+# --- HTTP polling loop ------------------------------------------------------
 
-def read_serial():
-    global _serial_port
+def read_http():
     while True:
-        device = detect_device()
         try:
-            with serial.Serial(device, BAUD, timeout=3) as ser:
-                with _serial_lock:
-                    _serial_port = ser
-                time.sleep(2)
-                while True:
-                    raw = ser.readline()
-                    if not raw:
-                        continue
-                    line = raw.decode('utf-8', errors='ignore').strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        GLib.idle_add(process_reading, data['t'], data['h'])
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-        except (serial.SerialException, OSError):
-            with _serial_lock:
-                _serial_port = None
+            data = _http_get('/latest', {'board_id': _board_id()})
+            if 'error' in data:
+                GLib.idle_add(set_no_sensor)
+            elif time.time() - data['ts'] > STALE_THRESHOLD_S:
+                GLib.idle_add(set_no_sensor)
+            else:
+                GLib.idle_add(process_reading, data['t'], data['h'])
+        except Exception:
             GLib.idle_add(set_no_sensor)
-            time.sleep(RECONNECT_DELAY)
+        time.sleep(2)
 
 
 # --- menu -------------------------------------------------------------------
@@ -260,7 +249,7 @@ def main():
     indicator.set_label("starting…", GUIDE)
     indicator.set_menu(build_menu())
 
-    threading.Thread(target=read_serial, daemon=True).start()
+    threading.Thread(target=read_http, daemon=True).start()
     Gtk.main()
 
 
