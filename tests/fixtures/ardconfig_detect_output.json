@@ -1,0 +1,25 @@
+{
+  "status": "success",
+  "exit_code": 0,
+  "steps": [
+    {
+      "status": "ok",
+      "name": "board_ttyACM0",
+      "message": "Arduino Uno Q on /dev/ttyACM0 [arduino:zephyr:unoq] — accessible"
+    }
+  ],
+  "boards": [
+    {
+      "device": "/dev/ttyACM0",
+      "vendor_id": "2341",
+      "product_id": "0078",
+      "name": "Arduino Uno Q",
+      "fqbn": "arduino:zephyr:unoq",
+      "board_id": "uno-q",
+      "serial": "657474962",
+      "accessible": true,
+      "notes": "Zephyr core is BETA. Requires bootloader burn on first use (double-click RESET)."
+    }
+  ],
+  "unknown_boards": []
+}
