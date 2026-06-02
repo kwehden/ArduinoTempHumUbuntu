@@ -17,7 +17,7 @@ _spike_active: dict[str, bool] = {}
 def _check_spike(con, board_id: str) -> bool:
     cutoff = int(time.time()) - SPIKE_WINDOW_S
     rows = con.execute(
-        "SELECT t FROM readings WHERE board_id = ? AND ts > ?",
+        "SELECT t FROM readings WHERE board_id = ? AND ts > ? AND t > -50",
         (board_id, cutoff),
     ).fetchall()
     if len(rows) < 2:
@@ -86,9 +86,10 @@ def post_reading(r: Reading):
     con.close()
 
     if spike and not _spike_active.get(r.board_id):
-        # Spike just started — alert the board
+        # Spike just started — alert the board unless a dismiss is already queued
         _spike_active[r.board_id] = True
-        _pending_cmds[r.board_id] = 'F'
+        if _pending_cmds.get(r.board_id) != 'D':
+            _pending_cmds[r.board_id] = 'F'
     elif not spike and _spike_active.get(r.board_id):
         # Spike cleared — dismiss (covers Linux-not-running case)
         _spike_active[r.board_id] = False
@@ -117,7 +118,7 @@ def get_latest(board_id: str):
 def get_readings(
     board_id: str,
     since: int = Query(default=0),
-    limit: int = Query(default=1000, le=10000),
+    limit: int = Query(default=1000, le=11000),
 ):
     con = _db()
     rows = con.execute(

@@ -256,7 +256,7 @@ class HistoryWindow:
     def _do_fetch(self):
         try:
             since = int(time.time()) - self.minutes * 60
-            self._data = _http_get('/readings', {'board_id': _board_id(), 'since': since, 'limit': 10000})
+            self._data = _http_get('/readings', {'board_id': _board_id(), 'since': since, 'limit': 11000})
         except Exception:
             self._data = []
         GLib.idle_add(self.da.queue_draw)
