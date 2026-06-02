@@ -5,10 +5,25 @@ import sqlite3
 import time
 import os
 
-DB_PATH = os.getenv("DB_PATH", "/data/ardtemp.db")
+DB_PATH           = os.getenv("DB_PATH", "/data/ardtemp.db")
+SPIKE_THRESHOLD_C = float(os.getenv("SPIKE_THRESHOLD_C", "5.0"))
+SPIKE_WINDOW_S    = int(os.getenv("SPIKE_WINDOW_S", "120"))
 
-# In-memory pending commands per board_id; cleared when consumed by POST /reading
+# In-memory state per board_id
 _pending_cmds: dict[str, str] = {}
+_spike_active: dict[str, bool] = {}
+
+
+def _check_spike(con, board_id: str) -> bool:
+    cutoff = int(time.time()) - SPIKE_WINDOW_S
+    rows = con.execute(
+        "SELECT t FROM readings WHERE board_id = ? AND ts > ? AND t > -50",
+        (board_id, cutoff),
+    ).fetchall()
+    if len(rows) < 2:
+        return False
+    temps = [r[0] for r in rows]
+    return (max(temps) - min(temps)) >= SPIKE_THRESHOLD_C
 
 
 def _db():
@@ -66,7 +81,22 @@ def post_reading(r: Reading):
         (ts, r.board_id, r.t, r.h),
     )
     con.commit()
+
+    spike = _check_spike(con, r.board_id)
     con.close()
+
+    if spike and not _spike_active.get(r.board_id):
+        # Spike just started — alert the board unless a dismiss is already queued
+        _spike_active[r.board_id] = True
+        if _pending_cmds.get(r.board_id) != 'D':
+            _pending_cmds[r.board_id] = 'F'
+    elif not spike and _spike_active.get(r.board_id):
+        # Spike cleared — dismiss (covers Linux-not-running case)
+        _spike_active[r.board_id] = False
+        _pending_cmds[r.board_id] = 'D'
+
+    # A 'D' from the Linux indicator (POST /command) takes effect here too;
+    # _spike_active stays True until the window clears so we won't re-send 'F'.
     cmd = _pending_cmds.pop(r.board_id, None)
     return {"cmd": cmd}
 
@@ -88,7 +118,7 @@ def get_latest(board_id: str):
 def get_readings(
     board_id: str,
     since: int = Query(default=0),
-    limit: int = Query(default=1000, le=10000),
+    limit: int = Query(default=1000, le=11000),
 ):
     con = _db()
     rows = con.execute(

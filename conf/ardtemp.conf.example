@@ -13,5 +13,5 @@ spike_threshold_c = 5.0
 # Alert trigger: look-back window in seconds.
 spike_window_s = 120
 
-# Seconds to wait before attempting serial reconnect after a disconnect.
+# Seconds between HTTP polling retries after a failed request.
 reconnect_delay = 5
