@@ -136,6 +136,7 @@ def dismiss_alert():
     global alert_active, flash_timer, flash_state
     alert_active = False
     flash_state  = False
+    temp_history.clear()
     if flash_timer is not None:
         GLib.source_remove(flash_timer)
         flash_timer = None
@@ -198,6 +199,154 @@ def read_http():
         time.sleep(2)
 
 
+# --- history window ---------------------------------------------------------
+
+class HistoryWindow:
+    _instance = None
+
+    def __init__(self):
+        self.minutes = 30
+        self._data   = []
+
+        self.win = Gtk.Window(title="Temperature History")
+        self.win.set_default_size(720, 340)
+        self.win.connect("destroy", self._on_destroy)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for margin in ('top', 'bottom', 'start', 'end'):
+            getattr(vbox, f'set_margin_{margin}')(8)
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hbox.pack_start(Gtk.Label(label="Show last:"), False, False, 0)
+        self.slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 30, 360, 30)
+        self.slider.set_value(30)
+        self.slider.set_hexpand(True)
+        self.slider.set_draw_value(False)
+        for m, lbl in [(30,"30m"),(60,"1h"),(120,"2h"),(180,"3h"),(240,"4h"),(300,"5h"),(360,"6h")]:
+            self.slider.add_mark(m, Gtk.PositionType.BOTTOM, lbl)
+        self.slider.connect("value-changed", self._on_slider)
+        hbox.pack_start(self.slider, True, True, 0)
+
+        self.da = Gtk.DrawingArea()
+        self.da.set_vexpand(True)
+        self.da.set_hexpand(True)
+        self.da.connect("draw", self._draw)
+
+        vbox.pack_start(hbox, False, False, 0)
+        vbox.pack_start(self.da, True, True, 0)
+        self.win.add(vbox)
+        self.win.show_all()
+        self._fetch()
+
+    def _on_destroy(self, _win):
+        HistoryWindow._instance = None
+
+    def _on_slider(self, slider):
+        snapped = round(slider.get_value() / 30) * 30
+        snapped = max(30, min(360, int(snapped)))
+        if int(slider.get_value()) != snapped:
+            slider.set_value(snapped)
+            return
+        self.minutes = snapped
+        self._fetch()
+
+    def _fetch(self):
+        threading.Thread(target=self._do_fetch, daemon=True).start()
+
+    def _do_fetch(self):
+        try:
+            since = int(time.time()) - self.minutes * 60
+            self._data = _http_get('/readings', {'board_id': _board_id(), 'since': since, 'limit': 10000})
+        except Exception:
+            self._data = []
+        GLib.idle_add(self.da.queue_draw)
+
+    def _draw(self, widget, cr):
+        a = widget.get_allocation()
+        W, H = a.width, a.height
+        ML, MR, MT, MB = 56, 16, 16, 36
+        PW, PH = W - ML - MR, H - MT - MB
+
+        # dark background
+        cr.set_source_rgb(0.13, 0.13, 0.16)
+        cr.rectangle(0, 0, W, H)
+        cr.fill()
+
+        if not self._data:
+            cr.set_source_rgb(0.55, 0.55, 0.60)
+            cr.set_font_size(13)
+            cr.move_to(W / 2 - 30, H / 2)
+            cr.show_text("no data")
+            return
+
+        def disp(t_c):
+            return c_to_f(t_c) if unit == 'F' else t_c
+
+        unit_lbl = '°F' if unit == 'F' else '°C'
+        now  = time.time()
+        span = self.minutes * 60
+        ts_list = [r['ts'] for r in self._data]
+        t_list  = [disp(r['t']) for r in self._data]
+        lo = min(t_list) - 0.5
+        hi = max(t_list) + 0.5
+        rng = hi - lo or 1
+
+        def xp(ts): return ML + (ts - (now - span)) / span * PW
+        def yp(t):  return MT + (1 - (t - lo) / rng) * PH
+
+        # horizontal grid + Y labels
+        for i in range(6):
+            t = lo + i * rng / 5
+            y = yp(t)
+            cr.set_source_rgba(0.28, 0.28, 0.33, 1)
+            cr.set_line_width(0.5)
+            cr.move_to(ML, y); cr.line_to(W - MR, y); cr.stroke()
+            cr.set_source_rgb(0.65, 0.65, 0.70)
+            cr.set_font_size(10)
+            cr.move_to(2, y + 4)
+            cr.show_text(f"{t:.1f}{unit_lbl}")
+
+        # vertical grid + X labels every 30 min
+        tick = 1800
+        t0 = int((now - span) / tick + 1) * tick
+        for ts in range(int(t0), int(now) + 1, tick):
+            x = xp(ts)
+            if x < ML or x > W - MR:
+                continue
+            cr.set_source_rgba(0.28, 0.28, 0.33, 1)
+            cr.set_line_width(0.5)
+            cr.move_to(x, MT); cr.line_to(x, H - MB); cr.stroke()
+            cr.set_source_rgb(0.65, 0.65, 0.70)
+            cr.set_font_size(10)
+            cr.move_to(x - 14, H - MB + 14)
+            cr.show_text(time.strftime("%H:%M", time.localtime(ts)))
+
+        # plot border
+        cr.set_source_rgb(0.75, 0.75, 0.75)
+        cr.set_line_width(1)
+        cr.rectangle(ML, MT, PW, PH)
+        cr.stroke()
+
+        # temperature line
+        cr.set_source_rgb(0.25, 0.85, 0.65)
+        cr.set_line_width(1.5)
+        started = False
+        for ts, t in zip(ts_list, t_list):
+            x, y = xp(ts), yp(t)
+            if not started:
+                cr.move_to(x, y); started = True
+            else:
+                cr.line_to(x, y)
+        cr.stroke()
+
+
+def show_history():
+    if HistoryWindow._instance is None:
+        HistoryWindow._instance = HistoryWindow()
+    else:
+        HistoryWindow._instance.win.present()
+
+
 # --- menu -------------------------------------------------------------------
 
 def on_toggle_unit(_item):
@@ -219,6 +368,10 @@ def build_menu():
     dismiss_item.set_sensitive(False)
     dismiss_item.connect("activate", lambda _: dismiss_alert())
     menu.append(dismiss_item)
+
+    history_item = Gtk.MenuItem(label="Show history…")
+    history_item.connect("activate", lambda _: show_history())
+    menu.append(history_item)
 
     test_item = Gtk.MenuItem(label="Test flash")
     test_item.connect("activate", lambda _: start_alert())
