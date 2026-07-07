@@ -22,7 +22,7 @@ BAUD              = 9600      # kept for reference; unused in HTTP mode
 RECONNECT_DELAY   = 5
 SPIKE_THRESHOLD_C = 5.0
 SPIKE_WINDOW_S    = 120
-STALE_THRESHOLD_S = 10        # readings older than this are treated as no-sensor
+STALE_THRESHOLD_S = 20        # readings older than this are treated as no-sensor
 
 _cfg = None
 

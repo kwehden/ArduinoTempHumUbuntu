@@ -3,9 +3,10 @@
 #include <Arduino_LED_Matrix.h>
 #include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, SERVICE_HOST, SERVICE_PORT
 
-#define HS300X_ADDR 0x44
-#define BOARD_ID    "r4wifi"
-#define QUEUE_SIZE  60   // ~2 minutes of readings buffered during outages
+#define HS300X_ADDR     0x44
+#define BOARD_ID        "r4wifi"
+#define QUEUE_SIZE      60        // ~2 minutes of readings buffered during outages
+#define READ_INTERVAL_MS 300000UL // 5 min — filament-storage mode
 
 ArduinoLEDMatrix matrix;
 
@@ -153,6 +154,7 @@ static int flushQueue() {
 // ---------------------------------------------------------------------------
 
 static unsigned long lastReadingMs = 0;
+static int           _postFailures  = 0;
 
 void setup() {
   matrix.begin();
@@ -170,7 +172,7 @@ void loop() {
   ensureWiFi();
   stepAlert();
 
-  if (millis() - lastReadingMs < 2000) return;
+  if (millis() - lastReadingMs < READ_INTERVAL_MS) return;
   lastReadingMs = millis();
 
   // Measurement trigger: 0-byte write (address only, per HS300x datasheet)
@@ -198,7 +200,12 @@ void loop() {
   int c   = postReading(t10, h10);
   if (c == -1) {
     enqueue(t10, h10);   // service unreachable — buffer for later
+    if (++_postFailures >= 5) {
+      WiFi.disconnect();   // force real reconnect on next ensureWiFi()
+      _postFailures = 0;
+    }
   } else {
+    _postFailures = 0;
     if (c) cmd = c;
   }
 
