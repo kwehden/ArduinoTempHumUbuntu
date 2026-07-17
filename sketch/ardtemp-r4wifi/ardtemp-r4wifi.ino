@@ -1,14 +1,22 @@
 #include <WiFiS3.h>
 #include <Wire.h>
+#include <ArduinoGraphics.h>
 #include <Arduino_LED_Matrix.h>
+#include <Arduino_Modulino.h>
 #include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, SERVICE_HOST, SERVICE_PORT
 
-#define HS300X_ADDR     0x44
-#define BOARD_ID        "r4wifi"
-#define QUEUE_SIZE      60        // ~2 minutes of readings buffered during outages
-#define READ_INTERVAL_MS 300000UL // 5 min — filament-storage mode
+#define HS300X_ADDR      0x44
+#define BOARD_ID         "r4wifi"
+#define QUEUE_SIZE       60        // ~2 minutes of readings buffered during outages
+#define READ_INTERVAL_MS 300000UL  // 5 min — filament-storage mode
+
+// PLA filament humidity thresholds (% RH)
+#define PLA_OK_H      15.0f   // ideal storage
+#define PLA_WARN_H    25.0f   // caution — matches HUMIDITY_HIGH_PCT service default
+#define PLA_DANGER_H  40.0f   // significant degradation risk
 
 ArduinoLEDMatrix matrix;
+ModulinoPixels   leds;
 
 // ---------------------------------------------------------------------------
 // Circular buffer for readings queued during service outages
@@ -82,6 +90,48 @@ static void stopAlert() {
   matrix.clear();
 }
 
+static void displayHumidity(float h) {
+  if (alertState != IDLE) return;
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d%%", (int)(h + 0.5f));
+  matrix.beginDraw();
+  matrix.stroke(0xFFFFFFFF);
+  matrix.textFont(Font_4x6);
+  matrix.beginText(0, 1, 0xFFFFFF);
+  matrix.print(buf);
+  matrix.endText();
+  matrix.endDraw();
+}
+
+
+// ---------------------------------------------------------------------------
+// Modulino Pixels — humidity bar for PLA filament storage
+// ---------------------------------------------------------------------------
+
+static float _lastH         = 0.0f;
+static bool  _humidityAlert = false;
+
+static void updatePixels(float h) {
+  if (_humidityAlert) {
+    for (int i = 0; i < 8; i++) leds.set(i, RED, 25);
+    leds.show();
+    return;
+  }
+  // bar fill: 0–50% RH → 0–8 lit pixels
+  int lit = (int)(h / 50.0f * 8.0f + 0.5f);
+  if (lit > 8) lit = 8;
+  ModulinoColor col =
+      (h < PLA_OK_H)     ? GREEN :
+      (h < PLA_WARN_H)   ? YELLOW :
+      (h < PLA_DANGER_H) ? ModulinoColor(255, 80, 0) :
+                           RED;
+  for (int i = 0; i < 8; i++) {
+    if (i < lit) leds.set(i, col, 25);
+    else         leds.clear(i);
+  }
+  leds.show();
+}
+
 
 // ---------------------------------------------------------------------------
 // WiFi
@@ -153,19 +203,23 @@ static int flushQueue() {
 // Setup / loop
 // ---------------------------------------------------------------------------
 
-static unsigned long lastReadingMs = 0;
+static unsigned long lastReadingMs = -READ_INTERVAL_MS; // fire immediately on first loop
 static int           _postFailures  = 0;
 
 void setup() {
   matrix.begin();
-  Wire1.begin();
-  Wire1.setClock(100000);
+  // Modulino.begin() initialises Wire1 at 100 kHz and unlocks the bus
+  Modulino.begin();
+  leds.begin();
+  leds.clear();
+  leds.show();
   // Wait up to 5 s for USB CDC host (debug serial); proceed without it.
   Serial.begin(9600);
   unsigned long t0 = millis();
   while (!Serial && millis() - t0 < 5000);
   ensureWiFi();
   delay(50);
+  displayHumidity(0);
 }
 
 void loop() {
@@ -194,6 +248,7 @@ void loop() {
   tRaw >>= 2;
   int32_t t10 = (int32_t)tRaw * 1650 / 16383 - 400;
   int32_t h10 = (int32_t)hRaw * 1000 / 16383;
+  _lastH = h10 / 10.0f;
 
   // Flush any queued readings first, then post current one
   int cmd = flushQueue();
@@ -211,4 +266,8 @@ void loop() {
 
   if      (cmd == 'F') startAlert();
   else if (cmd == 'D') stopAlert();
+  else if (cmd == 'H') _humidityAlert = true;
+  else if (cmd == 'N') _humidityAlert = false;
+  updatePixels(_lastH);
+  displayHumidity(_lastH);
 }

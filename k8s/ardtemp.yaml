@@ -34,13 +34,17 @@ spec:
         kubernetes.io/hostname: polecat
       containers:
         - name: ardtemp-service
-          image: laminarflow:30500/ardtemp/service:1.0.0
+          image: laminarflow:30500/ardtemp/service:1.1.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
             - name: DB_PATH
               value: /data/ardtemp.db
+            - name: SPIKE_THRESHOLD_C
+              value: "999"
+            - name: HUMIDITY_HIGH_PCT
+              value: "25.0"
           volumeMounts:
             - name: data
               mountPath: /data

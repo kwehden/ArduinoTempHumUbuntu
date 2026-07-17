@@ -8,10 +8,12 @@ import os
 DB_PATH           = os.getenv("DB_PATH", "/data/ardtemp.db")
 SPIKE_THRESHOLD_C = float(os.getenv("SPIKE_THRESHOLD_C", "5.0"))
 SPIKE_WINDOW_S    = int(os.getenv("SPIKE_WINDOW_S", "120"))
+HUMIDITY_HIGH_PCT = float(os.getenv("HUMIDITY_HIGH_PCT", "25.0"))
 
 # In-memory state per board_id
-_pending_cmds: dict[str, str] = {}
-_spike_active: dict[str, bool] = {}
+_pending_cmds:    dict[str, str]  = {}
+_spike_active:    dict[str, bool] = {}
+_humidity_active: dict[str, bool] = {}
 
 
 def _check_spike(con, board_id: str) -> bool:
@@ -94,6 +96,14 @@ def post_reading(r: Reading):
         # Spike cleared — dismiss (covers Linux-not-running case)
         _spike_active[r.board_id] = False
         _pending_cmds[r.board_id] = 'D'
+
+    if r.h > HUMIDITY_HIGH_PCT and not _humidity_active.get(r.board_id):
+        _humidity_active[r.board_id] = True
+        if _pending_cmds.get(r.board_id) != 'N':
+            _pending_cmds[r.board_id] = 'H'
+    elif r.h <= HUMIDITY_HIGH_PCT and _humidity_active.get(r.board_id):
+        _humidity_active[r.board_id] = False
+        _pending_cmds[r.board_id] = 'N'
 
     # A 'D' from the Linux indicator (POST /command) takes effect here too;
     # _spike_active stays True until the window clears so we won't re-send 'F'.
