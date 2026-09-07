@@ -13,6 +13,13 @@
 #define BOARD_ID         "r4wifi"
 #endif
 
+// postReading() formats the POST body into a fixed 80-byte buffer. The rest of
+// the JSON, plus a worst-case reading ("-40.0" / "100.0"), leaves room for 44
+// characters of BOARD_ID; anything longer would silently truncate the body into
+// invalid JSON, so fail the build instead. BOARD_ID must also contain no " or \,
+// which would break the JSON the same way — it is not escaped.
+static_assert(sizeof(BOARD_ID) <= 45, "BOARD_ID must be 44 characters or fewer");
+
 // Which metric the on-board 8x12 LED matrix shows: 'H' = relative humidity
 // (filament storage), 'T' = temperature in whole °C. Override in secrets.h.
 // The Modulino Pixels bar and all service alerting stay humidity-based
@@ -108,8 +115,10 @@ static void stopAlert() {
 static void displayReading(float t, float h) {
   if (alertState != IDLE) return;
   char buf[6];
-  if (DISPLAY_METRIC == 'T') snprintf(buf, sizeof(buf), "%dC", (int)(t + 0.5f));
-  else                       snprintf(buf, sizeof(buf), "%d%%", (int)(h + 0.5f));
+  // lroundf, not (int)(x + 0.5f): the latter truncates toward zero, so it
+  // rounds sub-zero temperatures the wrong way (-4.6 would show as -4C).
+  if (DISPLAY_METRIC == 'T') snprintf(buf, sizeof(buf), "%dC", (int)lroundf(t));
+  else                       snprintf(buf, sizeof(buf), "%d%%", (int)lroundf(h));
   matrix.beginDraw();
   matrix.stroke(0xFFFFFFFF);
   matrix.textFont(Font_4x6);
