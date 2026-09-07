@@ -172,7 +172,17 @@ static void ensureWiFi() {
 
 
 // ---------------------------------------------------------------------------
-// HTTP POST /reading  →  returns pending command char, 0 if none, -1 on fail
+// HTTP POST /reading
+//
+// Returns 'F', 'D', 'H' or 'N' if the service piggy-backed that command on the
+// response, 0 if the reading was accepted with no command pending, and -1 if
+// it was NOT accepted and the caller must queue it for retry.
+//
+// -1 means specifically "the service did not store this reading": no TCP
+// connection, no reply within the deadline, an unparseable status line, or any
+// status outside 2xx. Everything else counts as stored — by the time a 2xx
+// comes back the row is committed, so reporting failure would duplicate the
+// sample on retry rather than recover it.
 // ---------------------------------------------------------------------------
 
 static int postReading(int32_t t10, int32_t h10) {
@@ -192,18 +202,38 @@ static int postReading(int32_t t10, int32_t h10) {
   client.print("Connection: close\r\n\r\n");
   client.print(body);
 
-  // Read response (wait up to 3 s)
-  char resp[192] = {};
+  // Read response (wait up to 3 s). A real 200 runs ~156 bytes; the headroom
+  // here is so a longer header set cannot push the body out of the buffer and
+  // cost us a command.
+  char resp[320] = {};
   int pos = 0;
+  const int cap = (int)sizeof(resp) - 1;
   unsigned long deadline = millis() + 3000;
-  while (millis() < deadline && pos < 191) {
-    while (client.available() && pos < 191) resp[pos++] = client.read();
+  while (millis() < deadline && pos < cap) {
+    while (client.available() && pos < cap) resp[pos++] = client.read();
     if (!client.connected() && !client.available()) break;
   }
   client.stop();
 
-  char* p = strstr(resp, "\"cmd\":\"");
-  if (p && (p[7] == 'F' || p[7] == 'D')) return p[7];
+  // --- the reading was only stored if the service said so -------------------
+  if (pos == 0) return -1;                          // connected, never replied
+
+  // Status line looks like "HTTP/1.1 200 OK".
+  if (strncmp(resp, "HTTP/1.", 7) != 0) return -1;  // not a response we know
+  const char* sp = strchr(resp, ' ');
+  if (!sp) return -1;                               // malformed status line
+  int status = atoi(sp + 1);
+  if (status < 200 || status >= 300) return -1;     // rejected or errored
+
+  // --- accepted; deliver any piggy-backed command ---------------------------
+  // Past this point the row is committed server-side, so a missing or
+  // unrecognised command is not a failure: re-queueing here would duplicate
+  // the sample rather than recover it.
+  const char* p = strstr(resp, "\"cmd\":\"");
+  if (p) {
+    char c = p[7];
+    if (c == 'F' || c == 'D' || c == 'H' || c == 'N') return c;
+  }
   return 0;
 }
 
@@ -216,7 +246,10 @@ static int flushQueue() {
   int cmd = 0;
   while (_qCount > 0) {
     int c = postReading(_queue[_qHead].t10, _queue[_qHead].h10);
-    if (c == -1) return cmd;   // still unreachable — stop flushing
+    // Not accepted — stop flushing and keep the rest queued. Dequeuing on
+    // anything short of a confirmed store is how the buffer used to drain
+    // into an erroring service.
+    if (c == -1) return cmd;
     if (c)       cmd = c;
     _qHead = (_qHead + 1) % QUEUE_SIZE;
     _qCount--;
@@ -281,7 +314,10 @@ void loop() {
   int cmd = flushQueue();
   int c   = postReading(t10, h10);
   if (c == -1) {
-    enqueue(t10, h10);   // service unreachable — buffer for later
+    enqueue(t10, h10);   // not stored — buffer for later
+    // Counts unreachable and reachable-but-erroring alike. Cycling WiFi will
+    // not fix a 5xx, but after 5 consecutive failures (~25 min) a stale
+    // association is worth ruling out, and reassociating is cheap.
     if (++_postFailures >= 5) {
       WiFi.disconnect();   // force real reconnect on next ensureWiFi()
       _postFailures = 0;
