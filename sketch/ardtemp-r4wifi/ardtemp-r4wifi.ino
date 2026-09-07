@@ -3,6 +3,7 @@
 #include <ArduinoGraphics.h>
 #include <Arduino_LED_Matrix.h>
 #include <Arduino_Modulino.h>
+#include "response.h"
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVICE_HOST, SERVICE_PORT, [BOARD_ID]
 
 // Identity this board reports to the service. Every board flashed with this
@@ -174,15 +175,9 @@ static void ensureWiFi() {
 // ---------------------------------------------------------------------------
 // HTTP POST /reading
 //
-// Returns 'F', 'D', 'H' or 'N' if the service piggy-backed that command on the
-// response, 0 if the reading was accepted with no command pending, and -1 if
-// it was NOT accepted and the caller must queue it for retry.
-//
-// -1 means specifically "the service did not store this reading": no TCP
-// connection, no reply within the deadline, an unparseable status line, or any
-// status outside 2xx. Everything else counts as stored — by the time a 2xx
-// comes back the row is committed, so reporting failure would duplicate the
-// sample on retry rather than recover it.
+// Return contract and the accept/reject rules live in response.h, which the
+// host test suite compiles directly. -1 means the reading was not stored and
+// the caller must queue it; 0 or a command char mean it was.
 // ---------------------------------------------------------------------------
 
 static int postReading(int32_t t10, int32_t h10) {
@@ -215,26 +210,7 @@ static int postReading(int32_t t10, int32_t h10) {
   }
   client.stop();
 
-  // --- the reading was only stored if the service said so -------------------
-  if (pos == 0) return -1;                          // connected, never replied
-
-  // Status line looks like "HTTP/1.1 200 OK".
-  if (strncmp(resp, "HTTP/1.", 7) != 0) return -1;  // not a response we know
-  const char* sp = strchr(resp, ' ');
-  if (!sp) return -1;                               // malformed status line
-  int status = atoi(sp + 1);
-  if (status < 200 || status >= 300) return -1;     // rejected or errored
-
-  // --- accepted; deliver any piggy-backed command ---------------------------
-  // Past this point the row is committed server-side, so a missing or
-  // unrecognised command is not a failure: re-queueing here would duplicate
-  // the sample rather than recover it.
-  const char* p = strstr(resp, "\"cmd\":\"");
-  if (p) {
-    char c = p[7];
-    if (c == 'F' || c == 'D' || c == 'H' || c == 'N') return c;
-  }
-  return 0;
+  return ardtemp_classify_response(resp, pos);
 }
 
 

@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Pinned to the toolchain the deployed firmware is built with, so CI verifies
+# what actually ships. Bump these deliberately rather than tracking latest.
+env:
+  ARDUINO_CLI_VERSION: 1.4.1
+  CORE_VERSION: arduino:renesas_uno@1.5.3
+  LIB_GRAPHICS: ArduinoGraphics@1.1.5
+  LIB_MODULINO: Arduino_Modulino@0.8.0
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -24,4 +32,77 @@ jobs:
         run: pip install pyserial pytest
 
       - name: Run tests
+        # Turns a missing C compiler into a failure rather than a silent skip;
+        # the sketch host test would otherwise pass by not running.
+        env:
+          ARDTEMP_REQUIRE_C_TESTS: "1"
         run: pytest tests/ -v
+
+  sketch:
+    name: sketch (build)
+    runs-on: ubuntu-latest
+    env:
+      SKETCH: sketch/ardtemp-r4wifi
+      FQBN: arduino:renesas_uno:unor4wifi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Arduino core and libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ runner.os }}-${{ env.CORE_VERSION }}-${{ env.LIB_GRAPHICS }}-${{ env.LIB_MODULINO }}
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+            | BINDIR="$HOME/.local/bin" sh -s "$ARDUINO_CLI_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install core and libraries
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install "$CORE_VERSION"
+          arduino-cli lib install "$LIB_GRAPHICS" "$LIB_MODULINO"
+
+      # secrets.h is gitignored, so CI builds from the committed example. This
+      # also checks the example stays complete enough to compile on its own.
+      - name: Build with the example config (defaults)
+        run: |
+          cp "$SKETCH/secrets.h.example" "$SKETCH/secrets.h"
+          arduino-cli compile --fqbn "$FQBN" --warnings all "$SKETCH"
+
+      - name: Build with per-board overrides (temperature display)
+        run: |
+          cp "$SKETCH/secrets.h.example" "$SKETCH/secrets.h"
+          {
+            echo '#define BOARD_ID "ci-desk"'
+            echo "#define DISPLAY_METRIC 'T'"
+          } >> "$SKETCH/secrets.h"
+          arduino-cli compile --fqbn "$FQBN" --warnings all "$SKETCH"
+
+      # BOARD_ID is interpolated into a fixed 80-byte POST buffer; anything past
+      # 44 characters would silently truncate the JSON. Guard the guard.
+      - name: Reject an over-long BOARD_ID
+        run: |
+          cp "$SKETCH/secrets.h.example" "$SKETCH/secrets.h"
+          printf '#define BOARD_ID "%s"\n' "$(printf 'x%.0s' $(seq 1 45))" >> "$SKETCH/secrets.h"
+          if arduino-cli compile --fqbn "$FQBN" "$SKETCH" >build.log 2>&1; then
+            echo "::error::a 45-character BOARD_ID compiled; the static_assert is not firing"
+            exit 1
+          fi
+          if ! grep -q '44 characters or fewer' build.log; then
+            echo "::error::build failed, but not on the BOARD_ID static_assert:"
+            cat build.log
+            exit 1
+          fi
+          echo "static_assert fired as expected"
+
+      - name: Accept a 44-character BOARD_ID
+        run: |
+          cp "$SKETCH/secrets.h.example" "$SKETCH/secrets.h"
+          printf '#define BOARD_ID "%s"\n' "$(printf 'x%.0s' $(seq 1 44))" >> "$SKETCH/secrets.h"
+          arduino-cli compile --fqbn "$FQBN" "$SKETCH"
