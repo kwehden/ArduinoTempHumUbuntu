@@ -3,10 +3,25 @@
 #include <ArduinoGraphics.h>
 #include <Arduino_LED_Matrix.h>
 #include <Arduino_Modulino.h>
-#include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, SERVICE_HOST, SERVICE_PORT
+#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVICE_HOST, SERVICE_PORT, [BOARD_ID]
+
+// Identity this board reports to the service. Every board flashed with this
+// sketch must use a distinct value, or their readings interleave into one
+// series and they share a single pending-command slot. Override per board by
+// defining BOARD_ID in secrets.h; the default below is the original deployment.
+#ifndef BOARD_ID
+#define BOARD_ID         "r4wifi"
+#endif
+
+// Which metric the on-board 8x12 LED matrix shows: 'H' = relative humidity
+// (filament storage), 'T' = temperature in whole °C. Override in secrets.h.
+// The Modulino Pixels bar and all service alerting stay humidity-based
+// regardless of this setting.
+#ifndef DISPLAY_METRIC
+#define DISPLAY_METRIC   'H'
+#endif
 
 #define HS300X_ADDR      0x44
-#define BOARD_ID         "r4wifi"
 #define QUEUE_SIZE       60        // ~2 minutes of readings buffered during outages
 #define READ_INTERVAL_MS 300000UL  // 5 min — filament-storage mode
 
@@ -90,10 +105,11 @@ static void stopAlert() {
   matrix.clear();
 }
 
-static void displayHumidity(float h) {
+static void displayReading(float t, float h) {
   if (alertState != IDLE) return;
   char buf[6];
-  snprintf(buf, sizeof(buf), "%d%%", (int)(h + 0.5f));
+  if (DISPLAY_METRIC == 'T') snprintf(buf, sizeof(buf), "%dC", (int)(t + 0.5f));
+  else                       snprintf(buf, sizeof(buf), "%d%%", (int)(h + 0.5f));
   matrix.beginDraw();
   matrix.stroke(0xFFFFFFFF);
   matrix.textFont(Font_4x6);
@@ -108,6 +124,7 @@ static void displayHumidity(float h) {
 // Modulino Pixels — humidity bar for PLA filament storage
 // ---------------------------------------------------------------------------
 
+static float _lastT         = 0.0f;
 static float _lastH         = 0.0f;
 static bool  _humidityAlert = false;
 
@@ -219,7 +236,7 @@ void setup() {
   while (!Serial && millis() - t0 < 5000);
   ensureWiFi();
   delay(50);
-  displayHumidity(0);
+  displayReading(0, 0);
 }
 
 void loop() {
@@ -248,6 +265,7 @@ void loop() {
   tRaw >>= 2;
   int32_t t10 = (int32_t)tRaw * 1650 / 16383 - 400;
   int32_t h10 = (int32_t)hRaw * 1000 / 16383;
+  _lastT = t10 / 10.0f;
   _lastH = h10 / 10.0f;
 
   // Flush any queued readings first, then post current one
@@ -269,5 +287,5 @@ void loop() {
   else if (cmd == 'H') _humidityAlert = true;
   else if (cmd == 'N') _humidityAlert = false;
   updatePixels(_lastH);
-  displayHumidity(_lastH);
+  displayReading(_lastT, _lastH);
 }

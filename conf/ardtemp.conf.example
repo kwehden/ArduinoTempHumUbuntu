@@ -1,6 +1,6 @@
 [ardtemp]
-# Board profile ID from ardconfig — used to identify the board.
-# Run ardconfig-detect --json to see available board_id values.
+# Identity of the board to display. Must match BOARD_ID in the sketch's
+# secrets.h. Each physical board needs its own unique value.
 board = r4wifi
 
 # URL of the ardtemp-service (K8s NodePort).
