@@ -58,9 +58,12 @@ jobs:
 
       - name: Install arduino-cli
         run: |
+          # The install script requires BINDIR to exist already.
+          mkdir -p "$HOME/.local/bin"
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
             | BINDIR="$HOME/.local/bin" sh -s "$ARDUINO_CLI_VERSION"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/arduino-cli" version
 
       - name: Install core and libraries
         run: |
